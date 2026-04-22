@@ -12,12 +12,13 @@ use rocket::{
 
 use crate::{
     application::use_cases::ForwardProxyRequestUseCase,
-    domain::{ProxyRequest, ProxyResponse},
-    interfaces::cli::LogLevel,
+    domain::{LogLevel, ProxyRequest, ProxyResponse},
+    infrastructure::logger::RequestLogger,
 };
 
 pub struct AppState {
     pub use_case: Arc<ForwardProxyRequestUseCase>,
+    pub logger: Arc<RequestLogger>,
     pub log_level: LogLevel,
 }
 
@@ -63,6 +64,7 @@ impl<'r> FromRequest<'r> for IncomingRequestMeta {
 pub fn build_rocket(
     port: u16,
     use_case: Arc<ForwardProxyRequestUseCase>,
+    logger: Arc<RequestLogger>,
     log_level: LogLevel,
 ) -> Rocket<Build> {
     let figment = rocket::Config::figment()
@@ -73,6 +75,7 @@ pub fn build_rocket(
     rocket::custom(figment)
         .manage(AppState {
             use_case,
+            logger,
             log_level,
         })
         .mount(
@@ -236,59 +239,61 @@ async fn proxy(
     state: &State<AppState>,
 ) -> RawResponse {
     let start = Instant::now();
+    let client_ip = meta.client_ip.as_deref().unwrap_or("-");
+    let pb = state.logger.start_loader(&meta.method, &meta.uri);
 
-    let body = match data.open(64.mebibytes()).into_bytes().await {
-        Ok(bytes) if bytes.is_complete() => bytes.into_inner(),
-        _ => {
-            let status = Status::PayloadTooLarge;
-            log_request(
-                &meta,
-                status.code,
-                start.elapsed().as_millis(),
-                state.log_level,
-                None,
-                0,
-            );
-            return RawResponse(Response::build().status(status).finalize());
+    let (response, upstream_path) = match data.open(64.mebibytes()).into_bytes().await {
+        Ok(bytes) if bytes.is_complete() => {
+            let body = bytes.into_inner();
+            let mut path_and_query = match path {
+                Some(path) => format!("/{}", path.display()),
+                None => "/".to_string(),
+            };
+
+            if let Some(query) = &meta.query {
+                path_and_query.push('?');
+                path_and_query.push_str(query);
+            }
+
+            let proxy_request = ProxyRequest {
+                method: meta.method.clone(),
+                path_and_query: path_and_query.clone(),
+                headers: meta.headers.clone(),
+                body,
+            };
+
+            let upstream_path = path_and_query.clone();
+            let response = match state.use_case.execute(proxy_request).await {
+                Ok(response) => response,
+                Err(_) => ProxyResponse {
+                    status: Status::BadGateway.code,
+                    headers: Vec::new(),
+                    body: b"upstream error".to_vec(),
+                },
+            };
+            (response, Some(upstream_path))
         }
-    };
-
-    let mut path_and_query = match path {
-        Some(path) => format!("/{}", path.display()),
-        None => "/".to_string(),
-    };
-
-    if let Some(query) = &meta.query {
-        path_and_query.push('?');
-        path_and_query.push_str(query);
-    }
-
-    let proxy_request = ProxyRequest {
-        method: meta.method.clone(),
-        path_and_query: path_and_query.clone(),
-        headers: meta.headers.clone(),
-        body,
-    };
-
-    let response = match state.use_case.execute(proxy_request).await {
-        Ok(response) => response,
-        Err(_) => ProxyResponse {
-            status: Status::BadGateway.code,
-            headers: Vec::new(),
-            body: b"upstream error".to_vec(),
-        },
+        _ => (
+            ProxyResponse {
+                status: Status::PayloadTooLarge.code,
+                headers: Vec::new(),
+                body: b"payload too large".to_vec(),
+            },
+            None,
+        ),
     };
 
     let latency_ms = start.elapsed().as_millis();
-    let status = response.status;
-    let body_size = response.body.len();
-    log_request(
-        &meta,
-        status,
+    state.logger.finish_loader(
+        pb,
+        client_ip,
+        &meta.method,
+        &meta.uri,
+        response.status,
         latency_ms,
         state.log_level,
-        Some(&path_and_query),
-        body_size,
+        upstream_path.as_deref(),
+        response.body.len(),
     );
 
     RawResponse(response_to_rocket(response))
@@ -317,24 +322,3 @@ fn response_to_rocket(proxy_response: ProxyResponse) -> Response<'static> {
     builder.finalize()
 }
 
-fn log_request(
-    meta: &IncomingRequestMeta,
-    status: u16,
-    latency_ms: u128,
-    log_level: LogLevel,
-    upstream: Option<&str>,
-    body_size: usize,
-) {
-    let ip = meta.client_ip.clone().unwrap_or_else(|| "-".to_string());
-    let method = &meta.method;
-    let path = &meta.uri;
-
-    if log_level == LogLevel::Debug {
-        println!(
-            "{ip} \"{method} {path}\" {status} {latency_ms}ms bytes={body_size} upstream={}",
-            upstream.unwrap_or("-")
-        );
-    } else {
-        println!("{ip} \"{method} {path}\" {status} {latency_ms}ms");
-    }
-}

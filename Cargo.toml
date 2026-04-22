@@ -1,6 +1,6 @@
 [package]
 name = "ollama-proxy"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -12,6 +12,8 @@ rocket = { version = "0.5.1", features = ["json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+indicatif = "0.17"
+console = "0.15"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

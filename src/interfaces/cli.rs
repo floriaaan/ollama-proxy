@@ -1,21 +1,8 @@
 use anyhow::{anyhow, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use tracing_subscriber::{fmt, EnvFilter};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum LogLevel {
-    Info,
-    Debug,
-}
-
-impl LogLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Info => "info",
-            Self::Debug => "debug",
-        }
-    }
-}
+use crate::domain::LogLevel;
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -32,6 +19,9 @@ pub struct CliArgs {
 
     #[arg(long, default_value_t = 11434)]
     pub port: u16,
+
+    #[arg(long, default_value_t = 120)]
+    pub timeout: i64,
 
     #[arg(long, value_enum, default_value_t = LogLevel::Info)]
     pub log_level: LogLevel,

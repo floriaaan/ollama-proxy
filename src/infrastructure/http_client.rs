@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
@@ -14,9 +16,14 @@ pub struct ReqwestProxyGateway {
 }
 
 impl ReqwestProxyGateway {
-    pub fn new(host: String, token: String) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+    pub fn new(host: String, token: String, timeout: Option<Duration>) -> Result<Self> {
+        let mut client_builder = reqwest::Client::builder();
+
+        if let Some(timeout) = timeout {
+            client_builder = client_builder.timeout(timeout);
+        }
+
+        let client = client_builder
             .build()
             .context("failed to build reqwest client")?;
 
