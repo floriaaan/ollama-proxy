@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use application::use_cases::ForwardProxyRequestUseCase;
-use infrastructure::{config::AppConfig, http_client::ReqwestProxyGateway};
+use infrastructure::{
+    config::AppConfig, http_client::ReqwestProxyGateway, logger::RequestLogger,
+};
 use interfaces::{cli::CliArgs, http::build_rocket};
 
 fn print_startup(config: &AppConfig) {
@@ -28,13 +30,15 @@ async fn main() -> anyhow::Result<()> {
 
     interfaces::cli::init_logging(config.log_level.as_str())?;
 
-    let gateway = ReqwestProxyGateway::new(config.host.clone(), config.token.clone())
-        .context("failed to initialize upstream HTTP client")?;
+    let gateway =
+        ReqwestProxyGateway::new(config.host.clone(), config.token.clone(), config.timeout)
+            .context("failed to initialize upstream HTTP client")?;
     let use_case = Arc::new(ForwardProxyRequestUseCase::new(Arc::new(gateway)));
+    let logger = Arc::new(RequestLogger::new());
 
     print_startup(&config);
 
-    let rocket = build_rocket(config.port, use_case, config.log_level);
+    let rocket = build_rocket(config.port, use_case, logger, config.log_level);
     rocket.launch().await.context("failed to launch server")?;
 
     Ok(())
